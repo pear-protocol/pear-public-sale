@@ -3,32 +3,44 @@ pragma solidity ^0.8.16;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+
+/**
+ * @dev Error messages for require statements
+ */
+error SaleIsPaused();
+error SaleIsOngoing();
+error SaleIsOver();
+error AmountIsTooLow();
+
+interface IPublicSale {
+    event SaleStarted(uint40 saleStartEpoch);
+    event SalePaused(uint40 salePauseEpoch);
+    event SaleExtended(uint40 saleEndEpoch);
+    event BuyOrder(address indexed buyer, uint256 amount, uint256 tokens);
+    event FundsWithdrawn(address indexed owner, uint256 amount);
+}
 
 /**
  * @title PublicSale
  * @dev A smart contract for a token public sale.
  */
-contract PublicSale is Ownable {
-    using SafeMath for uint256;
-
+contract PublicSale is IPublicSale, Ownable {
+    // TOKEN PRICE
+    // Only accept USDC for payment
     IERC20 public usdcToken;
-
     // max token for public sale: 100mm
     uint256 public immutable tokensForSale = 100_000_000 * 1e18;
-
     // price per token is 0.025 USDC
     uint256 public immutable pricePerToken = 25 * 1e3;
 
-    // april 24th, 2023 12:00:00 UTC
+    // PUBLIC SALE DURATION
+    // April 24th, 2023 12:00:00 UTC
     uint40 public saleEndEpoch = 1682337600;
+    bool public isPaused = true;
 
+    // PUBLIC SALE STATE
     mapping(address => uint256) public tokenBalances;
     uint256 public totalTokensSold;
-
-    error SaleIsOver();
-    error SaleIsStillOngoing();
-    error AmountIsTooLow();
 
     /**
      * @dev Constructor that sets the initial contract parameters.
@@ -38,6 +50,14 @@ contract PublicSale is Ownable {
     constructor(address _usdcToken, address _owner) {
         usdcToken = IERC20(_usdcToken);
         transferOwnership(_owner);
+    }
+
+    /**
+     * @dev Modifier that checks if the sale has started.
+     */
+    modifier isNotPaused() {
+        if (isPaused) revert SaleIsPaused();
+        _;
     }
 
     /**
@@ -52,7 +72,7 @@ contract PublicSale is Ownable {
      * @dev Modifier that checks if the sale has ended.
      */
     modifier afterSale() {
-        if (block.timestamp <= saleEndEpoch) revert SaleIsStillOngoing();
+        if (block.timestamp <= saleEndEpoch) revert SaleIsOngoing();
         _;
     }
 
@@ -63,50 +83,60 @@ contract PublicSale is Ownable {
     function previewBuyTokens(
         uint256 _usdcAmount
     ) public pure returns (uint256) {
-        // example calculation: buy 1 USDC worth of tokens (40)
-        return _usdcAmount.div(pricePerToken).mul(1e18);
+        // example calculation: 1 * 1e6 USDC = 40 * 1e18 tokens
+        return (_usdcAmount * 1e18) / pricePerToken;
     }
 
     /**
      * @dev Function that allows users to buy tokens.
      * @param _usdcAmount The amount of USDC to spend.
      */
-    function buyTokens(uint256 _usdcAmount) external duringSale {
+    function buyTokens(uint256 _usdcAmount) external isNotPaused duringSale {
         uint256 tokenAmount = previewBuyTokens(_usdcAmount);
         require(
-            totalTokensSold.add(tokenAmount) <= tokensForSale,
+            totalTokensSold + tokenAmount <= tokensForSale,
             "Exceeds sale allocation"
         );
         if (tokenAmount <= 1) revert AmountIsTooLow();
-        require(
-            usdcToken.transferFrom(msg.sender, address(this), _usdcAmount),
-            "Transfer failed"
+        bool success = usdcToken.transferFrom(
+            msg.sender,
+            address(this),
+            _usdcAmount
         );
-        tokenBalances[msg.sender] = tokenBalances[msg.sender].add(tokenAmount);
-        totalTokensSold = totalTokensSold.add(tokenAmount);
+        require(success, "Transfer failed");
+        tokenBalances[msg.sender] += tokenAmount;
+        totalTokensSold += tokenAmount;
+        emit BuyOrder(msg.sender, _usdcAmount, tokenAmount);
     }
 
     /**
      * @dev Function that allows the owner to extend the sale duration by 7 days.
      */
     function extendSale() external onlyOwner duringSale {
-        saleEndEpoch = saleEndEpoch + 7 days;
+        saleEndEpoch += 7 days;
+        emit SaleExtended(saleEndEpoch);
     }
 
     /**
      * @dev Function that allows the owner to withdraw the USDC balance.
      */
     function withdrawUsdc() external onlyOwner afterSale {
-        require(
-            usdcToken.transfer(owner(), usdcToken.balanceOf(address(this))),
-            "Transfer failed"
-        );
+        uint256 balance = usdcToken.balanceOf(address(this));
+        bool success = usdcToken.transfer(owner(), balance);
+
+        require(success, "Transfer failed");
+        emit FundsWithdrawn(owner(), balance);
     }
 
     /**
-     * @dev Function that returns the amount of USDC raised.
+     * @dev Function that allows the owner toggle pause state.
      */
-    function getUsdcRaised() external view returns (uint256) {
-        return usdcToken.balanceOf(address(this));
+    function togglePause() external onlyOwner {
+        isPaused = !isPaused;
+        if (isPaused) {
+            emit SalePaused(uint40(block.timestamp));
+        } else {
+            emit SaleStarted(uint40(block.timestamp));
+        }
     }
 }

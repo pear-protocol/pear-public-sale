@@ -40,7 +40,24 @@ contract CounterTest is Test {
         assertEq(ps.previewBuyTokens(1_000_000 * 1e6), 40_000_000 * 1e18); // 1m USDC buys 40m tokens
     }
 
+    function test_RevertPausedBuy() public {
+        uint256 amount = 1_000 * 1e6; // 1000 USDC
+        deal(arbUsdc, charlie, amount);
+        deal(charlie, 10000 ether);
+        vm.startPrank(charlie);
+        IERC20(arbUsdc).approve(address(ps), amount);
+        vm.expectRevert(SaleIsPaused.selector);
+        ps.buyTokens(amount);
+        vm.stopPrank();
+
+        assertEq(ps.totalTokensSold(), 0); // 0 tokens sold
+        assertEq(ps.tokenBalances(charlie), 0); // 0 tokens bought by charlie
+        assertEq(IERC20(arbUsdc).balanceOf(address(ps)), 0); // 0 USDC in contract
+    }
+
     function testBuy() public {
+        vm.prank(bob);
+        ps.togglePause();
         uint256 amount = 1_000 * 1e6; // 1000 USDC
         deal(arbUsdc, charlie, amount);
         deal(charlie, 10000 ether);
@@ -117,7 +134,7 @@ contract CounterTest is Test {
 
         // Owner, during the sale
         vm.startPrank(bob);
-        vm.expectRevert(PublicSale.SaleIsStillOngoing.selector);
+        vm.expectRevert(SaleIsOngoing.selector);
         ps.withdrawUsdc();
         vm.stopPrank();
 
@@ -132,7 +149,7 @@ contract CounterTest is Test {
 
         // User, after the sale
         vm.startPrank(charlie);
-        vm.expectRevert(PublicSale.SaleIsOver.selector);
+        vm.expectRevert(SaleIsOver.selector);
         ps.buyTokens(1);
         vm.stopPrank();
 
@@ -145,7 +162,7 @@ contract CounterTest is Test {
         assertEq(IERC20(arbUsdc).balanceOf(bob), 1_000 * 1e6); // 1000 USDC in owner's wallet
 
         vm.startPrank(bob);
-        vm.expectRevert(PublicSale.SaleIsOver.selector);
+        vm.expectRevert(SaleIsOver.selector);
         ps.extendSale();
         vm.stopPrank();
     }
