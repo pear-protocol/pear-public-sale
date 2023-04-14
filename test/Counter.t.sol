@@ -152,6 +152,16 @@ contract CounterTest is Test {
         vm.expectRevert(SaleIsOver.selector);
         ps.buyTokens(1);
         vm.stopPrank();
+        // Only owner can call these functions
+        vm.startPrank(charlie);
+        vm.expectRevert("Ownable: caller is not the owner");
+        ps.withdrawUsdc();
+        vm.stopPrank();
+
+        vm.startPrank(charlie);
+        vm.expectRevert("Ownable: caller is not the owner");
+        ps.extendSale();
+        vm.stopPrank();
 
         // owner, after the sale
         vm.startPrank(bob);
